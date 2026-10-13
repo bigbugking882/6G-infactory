@@ -260,7 +260,7 @@ class env_subnetwork(gym.Env):
             itr += 1
             
         # Generate the rest of the states
-        prevDist = np.ones(self.numCell) * np.Inf
+        prevDist = np.ones(self.numCell) * np.inf
         for n in range(1,N):
             # Update movement for robots
             temp = self.loc[:,:,n-1] + orientation[:,:,n-1] * self.speed * self.sampTime
@@ -268,7 +268,7 @@ class env_subnetwork(gym.Env):
 
             # If two subnetworks are close, make sure they dont collide
             dist_pw = cdist(temp.T, temp.T)
-            np.fill_diagonal(dist_pw, np.Inf)
+            np.fill_diagonal(dist_pw, np.inf)
             _,idx = np.where(dist_pw <= self.minDist)
             nIdx,_ = np.unique(idx,return_index=True)
             if nIdx.any():
@@ -303,7 +303,7 @@ class env_subnetwork(gym.Env):
                     diff = np.array(self.path_points[randDir]) - np.array(self.path_points[task_list[d]])
                     orientation[:,d,n] = np.sign(diff)
                     task_list[d] = randDir
-                    prevDist[d] = np.Inf
+                    prevDist[d] = np.inf
             else:
                 prevDist = dist
     
