@@ -13,6 +13,7 @@ The environment is pure numpy; the GNN wrapper converts the graph to torch tenso
 import numpy as np
 
 from .config import WarehouseConfig
+from .wireless import WirelessChannel
 
 
 class WarehouseAGVEnv:
@@ -33,6 +34,7 @@ class WarehouseAGVEnv:
             cfg.f_local_mean * 0.3, cfg.f_local_mean * 2.0,
         )
         self.link_bw = np.array(cfg.link_bw, dtype=np.float64)
+        self.wireless = WirelessChannel(cfg) if cfg.use_wireless else None
 
         self.reset()
 
@@ -49,9 +51,12 @@ class WarehouseAGVEnv:
         self.agv_task = np.full(self.n_agents, -1, dtype=int)  # task currently served
 
         # Link / edge state
-        self.link_free = np.zeros(self.n_links)          # time when link becomes free
+        self.link_free = np.zeros(self.n_links)          # time when link free (serial mode only)
+        self.link_active = [[] for _ in range(self.n_links)]  # (agv_idx, end_time) per link (wireless mode)
         self.link_load = np.zeros(self.n_links)          # cumulative bits uploaded
         self.edge_free = 0.0                             # time when edge CPU becomes free
+        self.rate_samples = []                           # offload rates [bps] (wireless mode)
+        self.sinr_samples = []                           # offload SINR [dB] (wireless mode)
 
         # Tasks
         self.tasks = []                                  # list of dicts
@@ -119,11 +124,33 @@ class WarehouseAGVEnv:
         return best
 
     # ------------------------------------------------------------------ #
+    def _prune_links(self):
+        """Drop uploads that have already finished (wireless shared-medium mode)."""
+        for m in range(self.n_links):
+            self.link_active[m] = [(a, e) for (a, e) in self.link_active[m] if e > self.t]
+
+    def link_congestion(self):
+        """Per-link busy indicator: active upload count (wireless) or busy flag (serial)."""
+        if self.wireless is not None:
+            return np.array([len(a) for a in self.link_active], dtype=np.float64)
+        return (self.link_free > self.t).astype(np.float64)
+
+    def rate_upper(self, i, m):
+        """No-interference offload rate for AGV i on link m [bps]."""
+        if self.wireless is None:
+            return float(self.link_bw[m])
+        dist = np.linalg.norm(self.agv_pos[i] - self.edge_pos)
+        rate, _ = self.wireless.compute(dist, self.link_bw[m], [])
+        return rate
+
+    # ------------------------------------------------------------------ #
     def step(self, actions):
         """Apply one step. `actions` is an int array of shape (n_agents,)."""
         cfg = self.cfg
         t0 = self.t
         reward = np.zeros(self.n_agents, dtype=np.float64)
+
+        self._prune_links()
 
         # 1) idle AGVs pick tasks according to their actions
         idle = self._idle_agents()
@@ -229,10 +256,22 @@ class WarehouseAGVEnv:
         # offload via link (action - 2)
         m = int(action) - 2
         m = min(max(m, 0), self.n_links - 1)
-        up = task['D'] / self.link_bw[m]
-        upload_start = max(self.t + travel, self.link_free[m])
-        upload_end = upload_start + up
-        self.link_free[m] = upload_end
+        arrival = self.t + travel
+        if self.wireless is not None:
+            # shared medium: co-channel AGVs still uploading when this AGV arrives interfere
+            dist_i = np.linalg.norm(self.agv_pos[i] - self.edge_pos)
+            interferer_dists = [np.linalg.norm(self.agv_pos[j] - self.edge_pos)
+                                for (j, e) in self.link_active[m] if e > arrival]
+            rate, sinr_db = self.wireless.compute(dist_i, self.link_bw[m], interferer_dists)
+            upload_end = arrival + task['D'] / rate
+            self.link_active[m].append((i, upload_end))
+            self.rate_samples.append(rate)
+            self.sinr_samples.append(sinr_db)
+        else:
+            up = task['D'] / self.link_bw[m]
+            upload_start = max(arrival, self.link_free[m])
+            upload_end = upload_start + up
+            self.link_free[m] = upload_end
         self.link_load[m] += task['D']
         comp_start = max(upload_end, self.edge_free)
         done_time = comp_start + task['C'] / self.cfg.f_edge
@@ -293,7 +332,10 @@ class WarehouseAGVEnv:
         link_feat = np.zeros((self.n_links, 3), dtype=np.float32)
         link_feat[:, 0] = self.link_bw / max(self.link_bw)
         link_feat[:, 1] = self.link_load / (self.link_load.max() + 1e-6)
-        link_feat[:, 2] = np.clip((self.link_free - self.t) / (cfg.horizon * cfg.dt), 0, 1)
+        if self.wireless is not None:
+            link_feat[:, 2] = self.link_congestion() / max(self.n_agents, 1)
+        else:
+            link_feat[:, 2] = np.clip((self.link_free - self.t) / (cfg.horizon * cfg.dt), 0, 1)
 
         # Edges (heterogeneous, each as (2, E) index arrays into a per-type node space)
         edge_index = {}
@@ -335,10 +377,14 @@ class WarehouseAGVEnv:
         """Episode-level metrics used for evaluation."""
         total = max(self.total_arrived, 1)
         avg_comp_time = float(np.mean(self.completion_times)) if self.completion_times else float('nan')
+        avg_rate = float(np.mean(self.rate_samples)) if self.rate_samples else float('nan')
+        avg_sinr_db = float(np.mean(self.sinr_samples)) if self.sinr_samples else float('nan')
         return {
             'completion_rate': self.num_completed / total,
             'deadline_rate': self.num_met_deadline / total,
             'missed_rate': self.num_missed / total,
             'avg_completion_time': avg_comp_time,
             'link_imbalance': self._link_imbalance(),
+            'avg_rate': avg_rate,
+            'avg_sinr_db': avg_sinr_db,
         }

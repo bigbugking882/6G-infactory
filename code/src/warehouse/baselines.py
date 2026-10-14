@@ -37,15 +37,14 @@ def _assign_nearest(env, mode_fn):
 
 
 def greedy_actions(env):
-    """Offload when edge (best case) is faster than local; otherwise local."""
-    best_bw = max(env.link_bw)
+    """Offload when edge (no-interference best case) is faster than local; otherwise local."""
     f_edge = env.cfg.f_edge
 
     def mode(env, i, task):
         local = task['C'] / env.agv_cpu[i]
-        edge = task['D'] / best_bw + task['C'] / f_edge
+        m = int(np.argmin(env.link_congestion()))
+        edge = task['D'] / env.rate_upper(i, m) + task['C'] / f_edge
         if edge < local:
-            m = int(np.argmin(env.link_free))
             return 2 + m
         return 1
 
@@ -61,7 +60,7 @@ def all_local_actions(env):
 
 def all_edge_actions(env):
     def mode(env, i, task):
-        m = int(np.argmin(env.link_free))
+        m = int(np.argmin(env.link_congestion()))
         return 2 + m
 
     return _assign_nearest(env, mode)

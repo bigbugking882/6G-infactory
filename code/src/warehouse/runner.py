@@ -81,7 +81,7 @@ def evaluate_all(cfg, mappo, eval_episodes=20):
     for name, policy in policies.items():
         agg = {k: [] for k in
                ['completion_rate', 'deadline_rate', 'missed_rate',
-                'avg_completion_time', 'link_imbalance']}
+                'avg_completion_time', 'link_imbalance', 'avg_rate', 'avg_sinr_db']}
         for _ in range(eval_episodes):
             env = WarehouseAGVEnv(cfg)
             m = evaluate_episode(env, policy)

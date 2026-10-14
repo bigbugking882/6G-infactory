@@ -20,7 +20,16 @@ class WarehouseConfig:
     f_edge: float = 15.0e9          # edge server CPU [cycles/s]
 
     # --- Wi-Fi 7 multi-link ---
-    link_bw: List[float] = field(default_factory=lambda: [20.0e6, 40.0e6, 80.0e6])  # bps per link
+    link_bw: List[float] = field(default_factory=lambda: [20.0e6, 40.0e6, 80.0e6])  # base bandwidth per link [Hz]
+
+    # --- Wireless coupling (reuses the 3GPP path-loss model from the original project) ---
+    use_wireless: bool = True         # False -> fall back to fixed link_bw (ablation)
+    fc: float = 6e9                   # carrier frequency [Hz]
+    tx_pow_dbm: float = -10.0         # AGV transmit power [dBm]
+    noise_floor_dbm: float = -174.0   # thermal noise [dBm/Hz]
+    noise_fig_db: float = 10.0        # receiver noise figure [dB]
+    min_dist: float = 1.0             # clamp path-loss distance to avoid 0-distance singularity
+    max_spec_eff: float = 12.0        # cap on spectral efficiency [bps/Hz]
 
     # --- Task arrival / workload ---
     arrival_rate: float = 0.5        # Poisson mean tasks per step
